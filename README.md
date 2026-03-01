@@ -10,7 +10,7 @@ Built for unattended automation where tools like 1Password require biometric aut
 
 ```bash
 git clone https://github.com/cday-with-ai/Vault.git
-cd Vault
+cd vault
 npm install
 npm run build
 npm link

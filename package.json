@@ -4,21 +4,21 @@
   "description": "Lightweight macOS Keychain secret manager for CLI and agent workflows",
   "type": "module",
   "bin": {
-    "vault": "./dist/cli.js"
+    "vault": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "dev": "tsc -p tsconfig.build.json --watch",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "lint": "tsc --noEmit"
+    "build": "node_modules/.bin/tsc -p tsconfig.build.json",
+    "dev": "node_modules/.bin/tsc -p tsconfig.build.json --watch",
+    "test": "node_modules/.bin/vitest run",
+    "test:watch": "node_modules/.bin/vitest",
+    "lint": "node_modules/.bin/tsc --noEmit"
   },
   "engines": {
     "node": ">=20"
   },
   "license": "MIT",
   "dependencies": {
-    "commander": "^14.0.3"
+    "commander": "^12.1.0"
   },
   "devDependencies": {
     "@types/node": "^25.3.0",
