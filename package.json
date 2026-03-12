@@ -1,5 +1,5 @@
 {
-  "name": "vault-keychain",
+  "name": "meshvibe-vault",
   "version": "0.1.0",
   "description": "Lightweight macOS Keychain secret manager for CLI and agent workflows",
   "type": "module",

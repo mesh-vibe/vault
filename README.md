@@ -61,7 +61,7 @@ All secrets are stored in the default macOS login Keychain as generic passwords 
 Vault also exports its functions for use as a Node.js module:
 
 ```typescript
-import { vaultGet, vaultSet, vaultDelete, vaultList } from "vault-keychain";
+import { vaultGet, vaultSet, vaultDelete, vaultList } from "meshvibe-vault";
 
 const key = vaultGet("anthropic-api-key");
 ```
