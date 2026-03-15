@@ -1,7 +1,7 @@
 {
   "name": "meshvibe-vault",
-  "version": "0.1.0",
-  "description": "Lightweight macOS Keychain secret manager for CLI and agent workflows",
+  "version": "0.2.0",
+  "description": "Encrypted secret store (AES-256-GCM) with master key in macOS Keychain",
   "type": "module",
   "bin": {
     "vault": "dist/cli.js"

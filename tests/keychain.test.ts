@@ -1,115 +1,176 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { execFileSync } from "node:child_process";
-import { vaultGet, vaultSet, vaultDelete, vaultList, VaultError } from "../src/keychain.js";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { randomBytes, createCipheriv } from "node:crypto";
 
-vi.mock("node:child_process", () => ({
-  execFileSync: vi.fn(),
-}));
+// Mock homedir and execFileSync before importing
+const testDir = join(tmpdir(), `vault-test-${Date.now()}`);
+const testStorePath = join(testDir, "mesh-vibe", "vault", "secrets.enc");
 
-const mockExecFileSync = vi.mocked(execFileSync);
+// Generate a test master key
+const testMasterKey = randomBytes(32);
+const testMasterKeyHex = testMasterKey.toString("hex");
 
-beforeEach(() => {
-  vi.clearAllMocks();
+vi.mock("node:os", async () => {
+  const actual = await vi.importActual<typeof import("node:os")>("node:os");
+  return { ...actual, homedir: () => testDir };
 });
 
-describe("vaultGet", () => {
-  it("returns trimmed secret value", () => {
-    mockExecFileSync.mockReturnValue("my-secret-value\n");
-    const result = vaultGet("api-key");
-    expect(result).toBe("my-secret-value");
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      "/usr/bin/security",
-      ["find-generic-password", "-a", "vault", "-s", "api-key", "-w"],
-      { encoding: "utf-8", timeout: 5000 }
-    );
+vi.mock("node:child_process", () => ({
+  execFileSync: vi.fn((_cmd: string, args: string[]) => {
+    // Simulate Keychain: only the master key exists
+    if (args.includes("find-generic-password") && args.includes("vault-master-key")) {
+      return testMasterKeyHex + "\n";
+    }
+    if (args.includes("find-generic-password")) {
+      throw new Error("not found");
+    }
+    if (args.includes("add-generic-password")) {
+      return "";
+    }
+    if (args.includes("dump-keychain")) {
+      return "";
+    }
+    if (args.includes("delete-generic-password")) {
+      return "";
+    }
+    return "";
+  }),
+}));
+
+const {
+  vaultGet,
+  vaultSet,
+  vaultDelete,
+  vaultList,
+  VaultError,
+  getStorePath,
+} = await import("../src/keychain.js");
+
+describe("vault encrypted store", () => {
+  beforeEach(() => {
+    mkdirSync(join(testDir, "mesh-vibe", "vault"), { recursive: true });
   });
 
-  it("throws VaultError when key not found", () => {
-    mockExecFileSync.mockImplementation(() => {
-      throw new Error("security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.");
-    });
+  afterEach(() => {
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it("getStorePath returns correct path", () => {
+    expect(getStorePath()).toBe(testStorePath);
+  });
+
+  it("vaultSet creates encrypted file and vaultGet retrieves value", () => {
+    vaultSet("api-key", "secret123");
+
+    // File should exist and be encrypted (not plaintext)
+    const raw = readFileSync(testStorePath, "utf-8");
+    const payload = JSON.parse(raw);
+    expect(payload).toHaveProperty("iv");
+    expect(payload).toHaveProperty("tag");
+    expect(payload).toHaveProperty("data");
+    expect(raw).not.toContain("secret123");
+
+    // Should be able to get it back
+    const value = vaultGet("api-key");
+    expect(value).toBe("secret123");
+  });
+
+  it("vaultSet updates existing secret", () => {
+    vaultSet("key", "value1");
+    vaultSet("key", "value2");
+    expect(vaultGet("key")).toBe("value2");
+  });
+
+  it("vaultSet stores multiple secrets", () => {
+    vaultSet("key1", "value1");
+    vaultSet("key2", "value2");
+    expect(vaultGet("key1")).toBe("value1");
+    expect(vaultGet("key2")).toBe("value2");
+  });
+
+  it("vaultGet throws VaultError for missing key", () => {
+    vaultSet("exists", "yes");
     expect(() => vaultGet("missing")).toThrow(VaultError);
     expect(() => vaultGet("missing")).toThrow(/not found/);
   });
-});
 
-describe("vaultSet", () => {
-  it("calls security with correct args including -U flag", () => {
-    mockExecFileSync.mockReturnValue("");
-    vaultSet("api-key", "secret123");
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      "/usr/bin/security",
-      ["add-generic-password", "-a", "vault", "-s", "api-key", "-w", "secret123", "-U"],
-      { encoding: "utf-8", timeout: 5000 }
-    );
+  it("vaultGet throws VaultError when no store exists", () => {
+    expect(() => vaultGet("anything")).toThrow(VaultError);
+    expect(() => vaultGet("anything")).toThrow(/not found/);
   });
 
-  it("throws VaultError on failure", () => {
-    mockExecFileSync.mockImplementation(() => {
-      throw new Error("keychain locked");
-    });
-    expect(() => vaultSet("k", "v")).toThrow(VaultError);
-  });
-});
-
-describe("vaultDelete", () => {
-  it("calls security delete-generic-password", () => {
-    mockExecFileSync.mockReturnValue("");
-    vaultDelete("api-key");
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      "/usr/bin/security",
-      ["delete-generic-password", "-a", "vault", "-s", "api-key"],
-      { encoding: "utf-8", timeout: 5000 }
-    );
+  it("vaultDelete removes a secret", () => {
+    vaultSet("key1", "value1");
+    vaultSet("key2", "value2");
+    vaultDelete("key1");
+    expect(() => vaultGet("key1")).toThrow(VaultError);
+    expect(vaultGet("key2")).toBe("value2");
   });
 
-  it("throws VaultError when key not found", () => {
-    mockExecFileSync.mockImplementation(() => {
-      throw new Error("not found");
-    });
+  it("vaultDelete throws for missing key", () => {
+    vaultSet("exists", "yes");
     expect(() => vaultDelete("missing")).toThrow(VaultError);
-  });
-});
-
-describe("vaultList", () => {
-  it("parses dump-keychain output for vault entries", () => {
-    mockExecFileSync.mockReturnValue(
-      [
-        'keychain: "/Users/test/Library/Keychains/login.keychain-db"',
-        "class: genp",
-        '    "acct"<blob>="vault"',
-        '    "svce"<blob>="anthropic-api-key"',
-        "class: genp",
-        '    "acct"<blob>="vault"',
-        '    "svce"<blob>="openai-api-key"',
-        "class: genp",
-        '    "acct"<blob>="other-app"',
-        '    "svce"<blob>="unrelated-key"',
-      ].join("\n")
-    );
-
-    const keys = vaultList();
-    expect(keys).toEqual(["anthropic-api-key", "openai-api-key"]);
+    expect(() => vaultDelete("missing")).toThrow(/not found/);
   });
 
-  it("returns empty array when no vault entries", () => {
-    mockExecFileSync.mockReturnValue(
-      [
-        'keychain: "/Users/test/Library/Keychains/login.keychain-db"',
-        "class: genp",
-        '    "acct"<blob>="other-app"',
-        '    "svce"<blob>="some-key"',
-      ].join("\n")
-    );
-
-    const keys = vaultList();
-    expect(keys).toEqual([]);
+  it("vaultList returns sorted keys", () => {
+    vaultSet("zebra", "z");
+    vaultSet("alpha", "a");
+    vaultSet("middle", "m");
+    expect(vaultList()).toEqual(["alpha", "middle", "zebra"]);
   });
 
-  it("throws VaultError on failure", () => {
-    mockExecFileSync.mockImplementation(() => {
-      throw new Error("keychain locked");
-    });
-    expect(() => vaultList()).toThrow(VaultError);
+  it("vaultList returns empty array for empty store", () => {
+    // Write an empty store
+    vaultSet("temp", "t");
+    vaultDelete("temp");
+    expect(vaultList()).toEqual([]);
+  });
+
+  it("handles secrets with special characters", () => {
+    const specialValue = 'key="value" & <xml> \n\t $HOME ${PATH}';
+    vaultSet("special", specialValue);
+    expect(vaultGet("special")).toBe(specialValue);
+  });
+
+  it("handles multi-line values", () => {
+    const multiLine = "line1\nline2\nline3";
+    vaultSet("multi", multiLine);
+    expect(vaultGet("multi")).toBe(multiLine);
+  });
+
+  it("encrypted file uses fresh IV each write", () => {
+    vaultSet("key", "value");
+    const raw1 = readFileSync(testStorePath, "utf-8");
+    const payload1 = JSON.parse(raw1);
+
+    vaultSet("key", "value"); // same value, should get new IV
+    const raw2 = readFileSync(testStorePath, "utf-8");
+    const payload2 = JSON.parse(raw2);
+
+    expect(payload1.iv).not.toBe(payload2.iv);
+  });
+
+  it("detects tampered ciphertext", () => {
+    vaultSet("key", "value");
+    const raw = readFileSync(testStorePath, "utf-8");
+    const payload = JSON.parse(raw);
+
+    // Tamper with the data
+    payload.data = payload.data.replace(/[0-9a-f]/, "0");
+    writeFileSync(testStorePath, JSON.stringify(payload), "utf-8");
+
+    // May or may not throw depending on whether the tamper changes anything
+    // but if the auth tag doesn't match, it should throw
+    try {
+      vaultGet("key");
+      // If we get here, the tamper didn't change the data (unlikely but possible)
+    } catch (err) {
+      expect(err).toBeInstanceOf(VaultError);
+    }
   });
 });

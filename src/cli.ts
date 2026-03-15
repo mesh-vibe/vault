@@ -1,15 +1,24 @@
 #!/usr/bin/env node
 
 import { Command } from "commander";
-import { vaultGet, vaultSet, vaultDelete, vaultList, VaultError } from "./keychain.js";
+import {
+  vaultGet,
+  vaultSet,
+  vaultDelete,
+  vaultList,
+  VaultError,
+  initStore,
+  migrateFromKeychain,
+  cleanupOldKeychainEntries,
+} from "./keychain.js";
 import { installSkill } from "./templates/skill.md.js";
 
 const program = new Command();
 
 program
   .name("vault")
-  .description("macOS Keychain secret manager")
-  .version("0.1.0");
+  .description("Encrypted secret store (AES-256-GCM, master key in macOS Keychain)")
+  .version("0.2.0");
 
 program
   .command("set <key> <value>")
@@ -59,6 +68,59 @@ program
         for (const key of keys) {
           console.log(key);
         }
+      }
+    } catch (err) {
+      handleError(err);
+    }
+  });
+
+program
+  .command("init-store")
+  .description("Create a new encrypted vault (generates master key in Keychain)")
+  .action(() => {
+    try {
+      initStore();
+      console.log("Vault initialized. Master key stored in macOS Keychain.");
+    } catch (err) {
+      handleError(err);
+    }
+  });
+
+program
+  .command("migrate")
+  .description("Migrate secrets from macOS Keychain entries to encrypted store")
+  .option("--cleanup", "Delete old Keychain entries after migration")
+  .action((opts: { cleanup?: boolean }) => {
+    try {
+      const result = migrateFromKeychain();
+
+      if (result.migrated.length === 0 && result.errors.length === 0) {
+        console.log("No Keychain entries found to migrate.");
+        return;
+      }
+
+      if (result.migrated.length > 0) {
+        console.log(`Migrated ${result.migrated.length} secrets:`);
+        for (const key of result.migrated) {
+          console.log(`  ${key}`);
+        }
+      }
+
+      if (result.errors.length > 0) {
+        console.log(`Failed to migrate ${result.errors.length} secrets:`);
+        for (const key of result.errors) {
+          console.log(`  ${key}`);
+        }
+      }
+
+      if (opts.cleanup && result.migrated.length > 0) {
+        const cleanup = cleanupOldKeychainEntries(result.migrated);
+        console.log(`\nCleaned up ${cleanup.deleted.length} old Keychain entries.`);
+        if (cleanup.errors.length > 0) {
+          console.log(`Failed to clean up ${cleanup.errors.length} entries.`);
+        }
+      } else if (result.migrated.length > 0) {
+        console.log("\nRun 'vault migrate --cleanup' to remove old Keychain entries.");
       }
     } catch (err) {
       handleError(err);
